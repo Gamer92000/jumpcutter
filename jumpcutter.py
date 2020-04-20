@@ -11,6 +11,7 @@ from shutil import copyfile, rmtree
 import os
 import argparse
 from pytube import YouTube
+from joblib import Parallel, delayed
 
 def downloadFile(url):
     name = YouTube(url).streams.first().download()
@@ -92,39 +93,39 @@ AUDIO_FADE_ENVELOPE_SIZE = 400 # smooth out transitiion's audio by quickly fadin
     
 createPath(TEMP_FOLDER)
 
-command = "ffmpeg -i "+INPUT_FILE+" -qscale:v "+str(FRAME_QUALITY)+" "+TEMP_FOLDER+"/frame%06d.jpg -hide_banner"
-subprocess.call(command, shell=True)
-
-command = "ffmpeg -i "+INPUT_FILE+" -ab 160k -ac 2 -ar "+str(SAMPLE_RATE)+" -vn "+TEMP_FOLDER+"/audio.wav"
-
-subprocess.call(command, shell=True)
-
-command = "ffmpeg -i "+TEMP_FOLDER+"/input.mp4 2>&1"
+command = "ffmpeg -i "+INPUT_FILE+" 2>&1"
 f = open(TEMP_FOLDER+"/params.txt", "w")
 subprocess.call(command, shell=True, stdout=f)
-
-
-
-sampleRate, audioData = wavfile.read(TEMP_FOLDER+"/audio.wav")
-audioSampleCount = audioData.shape[0]
-maxAudioVolume = getMaxVolume(audioData)
 
 f = open(TEMP_FOLDER+"/params.txt", 'r+')
 pre_params = f.read()
 f.close()
 params = pre_params.split('\n')
 for line in params:
-    m = re.search('Stream #.*Video.* ([0-9]*) fps',line)
+    m = re.search(r'Stream #.*Video.* ([0-9]*(\.[0-9]*)?) fps',line)
     if m is not None:
         frameRate = float(m.group(1))
+
+if round(frameRate) != frameRate:
+    print("\033[91mFps got adjusted from ", frameRate , " fps to ", round(frameRate), " fps!\nThis may result in some timing issues but should overall work just fine!\033[0m")
+    frameRate = round(frameRate)
+
+command = "ffmpeg -i "+INPUT_FILE+" -qscale:v "+str(FRAME_QUALITY)+" -r " + str(frameRate) + " "+TEMP_FOLDER+"/frame%06d.jpg -hide_banner"
+subprocess.call(command, shell=True)
+
+command = "ffmpeg -i "+INPUT_FILE+" -ab 160k -ac 2 -ar "+str(SAMPLE_RATE)+" -vn "+TEMP_FOLDER+"/audio.wav"
+
+subprocess.call(command, shell=True)
+
+sampleRate, audioData = wavfile.read(TEMP_FOLDER+"/audio.wav")
+audioSampleCount = audioData.shape[0]
+maxAudioVolume = getMaxVolume(audioData)
 
 samplesPerFrame = sampleRate/frameRate
 
 audioFrameCount = int(math.ceil(audioSampleCount/samplesPerFrame))
 
 hasLoudAudio = np.zeros((audioFrameCount))
-
-
 
 for i in range(audioFrameCount):
     start = int(i*samplesPerFrame)
@@ -179,13 +180,15 @@ for chunk in chunks:
 
     startOutputFrame = int(math.ceil(outputPointer/samplesPerFrame))
     endOutputFrame = int(math.ceil(endPointer/samplesPerFrame))
-    for outputFrame in range(startOutputFrame, endOutputFrame):
-        inputFrame = int(chunk[0]+NEW_SPEED[int(chunk[2])]*(outputFrame-startOutputFrame))
-        didItWork = copyFrame(inputFrame,outputFrame)
-        if didItWork:
-            lastExistingFrame = inputFrame
-        else:
-            copyFrame(lastExistingFrame,outputFrame)
+
+    frames = endOutputFrame - startOutputFrame
+    threadAmount = 16
+
+    if(frames != 0):
+        for i in range(math.ceil(frames / threadAmount)):
+            Parallel(n_jobs = threadAmount if (i - 1 != math.ceil(frames / threadAmount)) else (frames // threadAmount))\
+            (delayed(copyFrame)(int(chunk[0]+NEW_SPEED[int(chunk[2])]*(outputFrame-startOutputFrame)), outputFrame)\
+            for outputFrame in range(startOutputFrame + i * threadAmount, (startOutputFrame + (i+1) * threadAmount) if (i - 1 != math.ceil(frames / threadAmount)) else endOutputFrame))
 
     outputPointer = endPointer
 

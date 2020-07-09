@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 from contextlib import closing
 from PIL import Image
 import subprocess
@@ -7,14 +9,13 @@ from scipy.io import wavfile
 import numpy as np
 import re
 import math
-from shutil import copyfile, rmtree
+from shutil import move, rmtree
 import os
 import argparse
-from pytube import YouTube
-from joblib import Parallel, delayed
+#from pytube import YouTube
 
 def downloadFile(url):
-    name = YouTube(url).streams.first().download()
+    #name = YouTube(url).streams.first().download()
     newname = name.replace(' ','_')
     os.rename(name,newname)
     return newname
@@ -29,7 +30,7 @@ def copyFrame(inputFrame,outputFrame):
     dst = TEMP_FOLDER+"/newFrame{:06d}".format(outputFrame+1)+".jpg"
     if not os.path.isfile(src):
         return False
-    copyfile(src, dst)
+    move(src, dst)
     if outputFrame%20 == 19:
         print(str(outputFrame+1)+" time-altered frames saved.")
     return True
@@ -181,14 +182,13 @@ for chunk in chunks:
     startOutputFrame = int(math.ceil(outputPointer/samplesPerFrame))
     endOutputFrame = int(math.ceil(endPointer/samplesPerFrame))
 
-    frames = endOutputFrame - startOutputFrame
-    threadAmount = 16
-
-    if(frames != 0):
-        for i in range(math.ceil(frames / threadAmount)):
-            Parallel(n_jobs = threadAmount if (i - 1 != math.ceil(frames / threadAmount)) else (frames // threadAmount))\
-            (delayed(copyFrame)(int(chunk[0]+NEW_SPEED[int(chunk[2])]*(outputFrame-startOutputFrame)), outputFrame)\
-            for outputFrame in range(startOutputFrame + i * threadAmount, (startOutputFrame + (i+1) * threadAmount) if (i - 1 != math.ceil(frames / threadAmount)) else endOutputFrame))
+    for outputFrame in range(startOutputFrame, endOutputFrame):
+        inputFrame = int(chunk[0]+NEW_SPEED[int(chunk[2])]*(outputFrame-startOutputFrame))
+        didItWork = copyFrame(inputFrame,outputFrame)
+        if didItWork:
+            lastExistingFrame = inputFrame
+        else:
+            copyFrame(lastExistingFrame,outputFrame)
 
     outputPointer = endPointer
 
